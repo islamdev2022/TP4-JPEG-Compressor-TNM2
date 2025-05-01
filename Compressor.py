@@ -24,6 +24,9 @@ def rgb_to_ycbcr(image):
 def ycbcr_to_rgb(Y, Cb, Cr):
     """Convert YCbCr back to RGB color space"""
 
+    Cb , Cr = upsample(Cb, Cr, "3")
+    print("CB SHAPE",Cb.shape)
+    print("CR SHAPE",Cr.shape)
 
     # Assume Cb and Cr are in [0, 255] and need to be centered
     Cb -= 128.0
@@ -118,24 +121,47 @@ def blockwise_transform(img, block_size, transform_func, D=None):
                     img[i:i + block_size, j:j + block_size])
 
     return transformed_img
-
-def process_dct_blocks(dct_blocks, block_size, transform_func, D=None):
-    """Process 3D array of DCT blocks and combine into a 2D image"""
+def process_dct_blocks(dct_blocks, block_size, transform_func, D=None, original_shape=None):
+    """
+    Process 3D array of DCT blocks and combine into a 2D image
     
+    Args:
+        dct_blocks: 3D array of DCT blocks
+        block_size: Size of each block
+        transform_func: Function to apply to each block
+        D: Optional DCT matrix
+        original_shape: Tuple (height, width) of the original image
+    """
     num_blocks = dct_blocks.shape[0]
-    # Calculate dimensions of the output image
-    blocks_per_side = int(np.sqrt(num_blocks))  # Assuming square arrangement
-    result_height = blocks_per_side * block_size
-    result_width = blocks_per_side * block_size
+    
+    # If original shape is provided, use it
+    if original_shape:
+        result_height, result_width = original_shape
+    else:
+        # Calculate dimensions based on number of blocks
+        blocks_height = int(np.ceil(np.sqrt(num_blocks)))
+        blocks_width = int(np.ceil(num_blocks / blocks_height))
+        result_height = blocks_height * block_size
+        result_width = blocks_width * block_size
     
     # Initialize output image
     result = np.zeros((result_height, result_width), dtype=np.float32)
     
     # Process each block
+    blocks_per_row = (result_width + block_size - 1) // block_size  # Ceiling division
+    
     for i in range(num_blocks):
         # Calculate block position
-        block_row = (i // blocks_per_side) * block_size
-        block_col = (i % blocks_per_side) * block_size
+        block_row = (i // blocks_per_row) * block_size
+        block_col = (i % blocks_per_row) * block_size
+        
+        # Make sure we don't go out of bounds
+        if block_row >= result_height or block_col >= result_width:
+            continue
+            
+        # Handle potential partial blocks at edges
+        h = min(block_size, result_height - block_row)
+        w = min(block_size, result_width - block_col)
         
         # Apply IDCT transform to this block
         if D is not None:
@@ -144,7 +170,7 @@ def process_dct_blocks(dct_blocks, block_size, transform_func, D=None):
             transformed_block = transform_func(dct_blocks[i])
         
         # Place in output image
-        result[block_row:block_row+block_size, block_col:block_col+block_size] = transformed_block
+        result[block_row:block_row+h, block_col:block_col+w] = transformed_block[:h, :w]
     
     return result
 
@@ -418,40 +444,29 @@ def flatten_rle(rle):
     return [f"{run}/{val}" for run, val in rle]
 
 def unflatten_rle(decoded_string):
-    """
-    Convert a Huffman-decoded string back to RLE format (list of tuples)
-    With additional debugging and error handling
-    
-    Args:
-        decoded_string: String from Huffman decoding
-        
-    Returns:
-        List of (zero_count, value) tuples
-    """
-    # Debug information
+    """Parse RLE data from decoded string with proper handling of your format"""
     print("Type of decoded string:", type(decoded_string))
     print("Length of decoded string:", len(decoded_string))
     print("First 20 characters:", decoded_string[:20])
     
-    # Create a safe version with better error handling
     rle_data = []
     
-    # For now, use a simple approach - every two characters represent a tuple
+    # Split by the forward slash
+    parts = decoded_string.split('/')
+    
     i = 0
-    while i < len(decoded_string) - 1:  # Ensure we have at least 2 chars
+    while i < len(parts) - 1:  # Need at least 2 parts for a tuple
         try:
-            # Try to extract two consecutive characters as run and value
-            run = int(decoded_string[i]) if decoded_string[i].isdigit() else 0
-            val = int(decoded_string[i+1]) if decoded_string[i+1].isdigit() else 0
+            run = int(float(parts[i])) if parts[i].strip() else 0
+            val = int(float(parts[i+1])) if parts[i+1].strip() else 0
             rle_data.append((run, val))
-        except (ValueError, IndexError):
-            # If conversion fails, skip this pair
-            pass
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing RLE at index {i}: {e}")
         i += 2
     
-    # If we couldn't parse anything, add at least one EOB marker
+    # Add EOB marker if empty
     if not rle_data:
-        rle_data.append((0, 0))  # EOB marker
+        rle_data.append((0, 0))
     
     print("Parsed RLE data (first 5 tuples):", rle_data[:5])
     return rle_data
@@ -523,11 +538,15 @@ def main():
     Cb_padded, Cb_padding = pad_image_to_block_size(Cb_downsampled, block_size)
     Cr_padded, Cr_padding = pad_image_to_block_size(Cr_downsampled, block_size)
     
+    Cb_centered = Cb_padded - 128
+    Cr_centered = Cr_padded - 128
+    print("Cb_centered range:", Cb_centered.min(), Cb_centered.max())
+    print("Cr_centered range:", Cr_centered.min(), Cr_centered.max())
     # DCT transformation
     D = dct_matrix(block_size)
     Y_dct = blockwise_transform(Y_padded, block_size, dct_2d_matrix, D)
-    Cb_dct = blockwise_transform(Cb_padded, block_size, dct_2d_matrix, D)
-    Cr_dct = blockwise_transform(Cr_padded, block_size, dct_2d_matrix, D)
+    Cb_dct = blockwise_transform(Cb_centered, block_size, dct_2d_matrix, D)
+    Cr_dct = blockwise_transform(Cr_centered, block_size, dct_2d_matrix, D)
     
     print(f"Original Y range: {Y.min()} to {Y.max()}")
     print(f"Y DCT range before quantization: {Y_dct.min()} to {Y_dct.max()}")
@@ -613,6 +632,13 @@ def main():
     Y_dct_dq = np.array([dequantize_dct(block, Q_Y) for block in combined_y_matrix])
     print(f"Y DCT dequantized range: {Y_dct_dq.min()} to {Y_dct_dq.max()}")
     
+    # After inverse zigzag
+    print(f"First zigzag_y_decoded block shape: {np.array(zigzag_y_decoded[:64]).shape}")
+    print(f"First few values: {zigzag_y_decoded[:10]}")
+
+    # After reshaping
+    print(f"combined_y_matrix shape: {combined_y_matrix.shape}")
+    
     combined_cb_matrix = np.array(zigzag_cb_decoded).reshape(-1, 64).reshape(-1, 8, 8)
     Cb_dct_dq = np.array([dequantize_dct(block, Q_C) for block in combined_cb_matrix])
     
@@ -632,40 +658,36 @@ def main():
     # After defining your process_dct_blocks function:
 
     print(f"Y_dct_dq shape and sample: {Y_dct_dq.shape}, {Y_dct_dq[0, 0]}")
-    
-    # If Y is all zeros, use Cb or Cr data instead
-    if Y_dct_dq.max() == 0:
-        print("WARNING: Y channel is all zeros - using artificial luminance!")
-        # Create artificial Y data from Cb/Cr or set to mid-gray
-        Y_idct = np.ones((block_size, block_size)) * 128  # Mid-gray
-    else:
-        Y_idct = process_dct_blocks(Y_dct_dq, block_size, idct_2d_matrix, D)
-    
-    Cb_idct = process_dct_blocks(Cb_dct_dq, block_size, idct_2d_matrix, D)
-    Cr_idct = process_dct_blocks(Cr_dct_dq, block_size, idct_2d_matrix, D)
 
+    # Store original shapes before padding
+    Y_original_shape = Y_downsampled.shape
+    Cb_original_shape = Cb_downsampled.shape
+    Cr_original_shape = Cr_downsampled.shape
+
+    # 1) Perform IDCT on your centered blocks
+    Y_idct  = process_dct_blocks(Y_dct_dq,  block_size, idct_2d_matrix, D, Y_original_shape)
+    Cb_idct = process_dct_blocks(Cb_dct_dq, block_size, idct_2d_matrix, D, Cb_original_shape)
+    Cr_idct = process_dct_blocks(Cr_dct_dq, block_size, idct_2d_matrix, D, Cr_original_shape)
     
-    # Remove padding
-    Y_unpadded = unpad_image(Y_idct, Y_padding)
-    Cb_unpadded = unpad_image(Cb_idct, Cb_padding)
-    Cr_unpadded = unpad_image(Cr_idct, Cr_padding)
+    # 2) Unpad the *centered* IDCT outputs
+    Y_unpadded_center  = unpad_image(Y_idct,  Y_padding)
+    Cb_unpadded_center = unpad_image(Cb_idct, Cb_padding)
+    Cr_unpadded_center = unpad_image(Cr_idct, Cr_padding)
     
-    print(f"Y range1: {Y_unpadded.min()} to {Y_unpadded.max()}")
-    print(f"Cb range: {Cb_unpadded.min()} to {Cb_unpadded.max()}")
-    print(f"Cr range: {Cr_unpadded.min()} to {Cr_unpadded.max()}")
+    # 3) Now “uncenter” the chroma by adding +128
+    Cb_unpadded = Cb_unpadded_center + 128
+    Cr_unpadded = Cr_unpadded_center + 128
     
-    # Clip values to valid range
-    Y_unpadded = np.clip(Y_unpadded, 0, 255)
-    Cb_unpadded = np.clip(Cb_unpadded, 0, 255)
-    Cr_unpadded = np.clip(Cr_unpadded, 0, 255)
+    # 4) Clip into [0,255]
+    Y_unpadded  = np.clip(Y_unpadded_center, 0, 255)
+    Cb_unpadded = np.clip(Cb_unpadded,       0, 255)
+    Cr_unpadded = np.clip(Cr_unpadded,       0, 255)
+
     
     print(f"Y range2: {Y_unpadded.min()} to {Y_unpadded.max()}")
     print(f"Cb range: {Cb_unpadded.min()} to {Cb_unpadded.max()}")
     print(f"Cr range: {Cr_unpadded.min()} to {Cr_unpadded.max()}")
-    
-    Y_unpadded = np.repeat(np.repeat(Y_unpadded, 2, axis=0), 2, axis=1)
-    Cb_unpadded = np.repeat(np.repeat(Cb_unpadded, 2, axis=0), 2, axis=1)
-    Cr_unpadded = np.repeat(np.repeat(Cr_unpadded, 2, axis=0), 2, axis=1)
+
     
     # Show the IDCT components
     show_idct(Y_unpadded, Cb_unpadded, Cr_unpadded)
@@ -677,7 +699,6 @@ def main():
     print(f"Shapes before conversion: Y={Y_unpadded.shape}, Cb={Cb_unpadded.shape}, Cr={Cr_unpadded.shape}")
     
     # Convert back to RGB
-    # Before color conversion, artificially set Y to a mid-range value
     reconstructed_image = ycbcr_to_rgb(Y_unpadded, Cb_unpadded, Cr_unpadded)
     
     # Show the reconstructed image
