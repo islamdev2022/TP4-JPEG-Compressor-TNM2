@@ -387,19 +387,24 @@ def zigzag_scan(matrix):
     result = []
     for s in range(rows + cols - 1):
         if s % 2 == 0:
-            for i in range(max(0, s - cols + 1), min(rows, s + 1)):
-                result.append(matrix[i][s - i])
+            # Even diagonals: top-right to bottom-left (row-major)
+            for i in range(max(0, s - rows + 1), min(s + 1, cols)):
+                x = s - i
+                y = i
+                result.append(matrix[x][y])
         else:
-            for i in range(max(0, s - rows + 1), min(cols, s + 1)):
-                result.append(matrix[s - i][i])
+            # Odd diagonals: bottom-left to top-right (row-major)
+            for i in range(max(0, s - cols + 1), min(s + 1, rows)):
+                x = i
+                y = s - i
+                result.append(matrix[x][y])
     return result
 
 def Run_Length(data):
-    ac_coeffs = data[1:]
     rle = []
     zero_count = 0
 
-    for coeff in ac_coeffs:
+    for coeff in data:
         if coeff == 0:
             zero_count += 1
         else:
@@ -580,9 +585,30 @@ def main():
     print("before zigzag Cb:", Cb_dct_q[:10])
     print("before zigzag Cr:", Cr_dct_q[:10])
     
-    zigzag_y = zigzag_scan(Y_dct_q)
-    zigzag_cb = zigzag_scan(Cb_dct_q)
-    zigzag_cr = zigzag_scan(Cr_dct_q)
+    def split_into_blocks(matrix, block_size=8):
+        h, w = matrix.shape
+        blocks = []
+        for y in range(0, h, block_size):
+            for x in range(0, w, block_size):
+                block = matrix[y:y+block_size, x:x+block_size]
+                blocks.append(block)
+        return blocks
+
+    # During encoding:
+    Y_blocks = split_into_blocks(Y_dct_q)  # List of 8x8 blocks
+    zigzag_y = []
+    for block in Y_blocks:
+        zigzag_y.extend(zigzag_scan(block))  # Per-block zigzag
+        
+    Cb_blocks = split_into_blocks(Cb_dct_q)  # List of 8x8 blocks
+    zigzag_cb = []
+    for block in Cb_blocks:
+        zigzag_cb.extend(zigzag_scan(block))
+        
+    Cr_blocks = split_into_blocks(Cr_dct_q)  # List of 8x8 blocks
+    zigzag_cr = []
+    for block in Cr_blocks:
+        zigzag_cr.extend(zigzag_scan(block))
     
     print("Zigzag scan Y:", zigzag_y[:10])
     print("Zigzag scan Cb:", zigzag_cb[:10])
@@ -659,6 +685,10 @@ def main():
     res_y = process_huffman_encoding("|".join(symbols_y))
     res_cb = process_huffman_encoding("|".join(symbols_cb))
     res_cr = process_huffman_encoding("|".join(symbols_cr))#correct 
+    
+    metrics_y = res_y['original_size'], res_y['compressed_size'], res_y['compression_rate']
+    metrics_cb = res_cb['original_size'], res_cb['compressed_size'], res_cb['compression_rate']
+    metrics_cr = res_cr['original_size'], res_cr['compressed_size'], res_cr['compression_rate']
 
 
     # Decompressing the data
@@ -784,10 +814,6 @@ def main():
 
     print(f"Y_dct_dq shape and sample: {Y_dct_dq.shape}, {Y_dct_dq[0, 0]}")
 
-    # Store original shapes before padding
-    Y_original_shape = Y_downsampled.shape
-    Cb_original_shape = Cb_downsampled.shape
-    Cr_original_shape = Cr_downsampled.shape
 
     # Inverse DCT
     Y_idct = blockwise_transform(Y_dct_dq, block_size, idct_2d_matrix, D)
@@ -832,6 +858,10 @@ def main():
     plt.title("Reconstructed Image")
     plt.axis("off")
     plt.show()
+    
+    print("metrics_y:", metrics_y)
+    print("metrics_cb:", metrics_cb)
+    print("metrics_cr:", metrics_cr)
     
     # Calculate PSNR between original and reconstructed images
     psnr_value = psnr(image, reconstructed_image)
