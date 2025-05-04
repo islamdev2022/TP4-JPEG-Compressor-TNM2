@@ -1,3 +1,5 @@
+import cv2
+from matplotlib import pyplot as plt
 import numpy as np
 from PIL import Image, ImageTk
 from Huffman import process_huffman_encoding,huffman_decode
@@ -29,8 +31,6 @@ def ycbcr_to_rgb(Y, Cb, Cr):
     """Convert YCbCr back to RGB color space"""
 
     Cb , Cr = upsample(Cb, Cr, "3")
-    print("CB SHAPE",Cb.shape)
-    print("CR SHAPE",Cr.shape)
 
     # Assume Cb and Cr are in [0, 255] and need to be centered
     Cb -= 128.0
@@ -54,7 +54,126 @@ def psnr(original, compressed):
         mse = np.mean((original.astype(np.float32) - compressed.astype(np.float32)) ** 2)
         return 10 * np.log10(255 ** 2 / mse) if mse != 0 else float('inf')
 
+def showDCT(original, Y , Cb , Cr):
+    fig, axes = plt.subplots(1, 4, figsize=(16, 5))
+
+    axes[0].imshow(original)
+    axes[0].set_title("Original (RGB)")
+    axes[0].axis("off")
+
+    axes[1].imshow(Y, cmap='gray')
+    axes[1].set_title("DCT Y")
+    axes[1].axis("off")
+
+    axes[2].imshow(Cb, cmap='gray')
+    axes[2].set_title("DCT Cb")
+    axes[2].axis("off")
+
+    axes[3].imshow(Cr, cmap='gray')
+    axes[3].set_title("DCT Cr")
+    axes[3].axis("off")
+
+    plt.tight_layout()
+    plt.show()
     
+def show_quantized(dct_q_y, dct_q_cb, dct_q_cr):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(np.log(1 + np.abs(dct_q_y)), cmap='gray')
+    axes[0].set_title("Quantized Y DCT Coefficients")
+    axes[0].axis("off")
+
+    axes[1].imshow(np.log(1 + np.abs(dct_q_cb)), cmap='gray')
+    axes[1].set_title("Quantized Cb DCT Coefficients")
+    axes[1].axis("off")
+
+    axes[2].imshow(np.log(1 + np.abs(dct_q_cr)), cmap='gray')
+    axes[2].set_title("Quantized Cr DCT Coefficients")
+    axes[2].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+    
+    
+def show_ycrcb_components(original, Y, Cb, Cr):
+    fig, axes = plt.subplots(1, 4, figsize=(16, 5))
+
+    axes[0].imshow(original)
+    axes[0].set_title("Original (RGB)")
+    axes[0].axis("off")
+
+    axes[1].imshow(Y, cmap='gray')
+    axes[1].set_title("Y (Luminance)")
+    axes[1].axis("off")
+
+    axes[2].imshow(Cb, cmap='gray')
+    axes[2].set_title("Cb (Blue Diff)")
+    axes[2].axis("off")
+
+    axes[3].imshow(Cr, cmap='gray')
+    axes[3].set_title("Cr (Red Diff)")
+    axes[3].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+    
+    
+def compute_block_stats(dct_coeff_block):
+    """Compute mean and variance of an 8x8 DCT coefficient block."""
+    mean = np.mean(dct_coeff_block)
+    variance = np.var(dct_coeff_block)
+    return mean, variance
+
+
+def get_flattened_coefficients(quantized_dct):
+    """Flatten quantized DCT coefficients into a 1D array."""
+    return np.concatenate([block.ravel() for block in quantized_dct])
+
+def plot_quantized_distribution(coefficients, quality, channel="Y"):
+    """Plot histogram of quantized coefficients."""
+    plt.figure(figsize=(10, 6))
+    
+    # Filter out zeros to avoid skewing the log scale (optional)
+    non_zero = coefficients[coefficients != 0]
+    
+    # Plot histogram with logarithmic y-axis
+    plt.hist(non_zero, bins=100, range=(-100, 100), alpha=0.7, log=True)
+    plt.title(f"Distribution of Quantized {channel} Coefficients (Quality={quality})")
+    plt.xlabel("Coefficient Value")
+    plt.ylabel("Frequency (log scale)")
+    plt.grid(True)
+    plt.show()
+    
+    
+def split_into_blocks(matrix, block_size=8):
+    h, w = matrix.shape
+    blocks = []
+    for y in range(0, h, block_size):
+        for x in range(0, w, block_size):
+            block = matrix[y:y+block_size, x:x+block_size]
+            blocks.append(block)
+    return blocks
+      
+def count_zero_nonzero_per_block(quantized_block):
+
+    zero_mask = (quantized_block == 0)
+    zero_count = np.sum(zero_mask)
+    nonzero_count = quantized_block.size - zero_count  # 8x8 = 64 total coefficients
+    return zero_count, nonzero_count
+
+def analyze_compression(Y_q, Cb_q, Cr_q, original_size_bytes, B=4, C=1):
+    # Combine all coefficients
+    all_coeffs = np.concatenate([Y_q.ravel(), Cb_q.ravel(), Cr_q.ravel()])
+    
+    # Calculate stats
+    non_zero = all_coeffs[all_coeffs != 0]
+    avg_mag = np.abs(non_zero).mean() if len(non_zero) > 0 else 0
+    zero_count = len(all_coeffs) - len(non_zero)
+    
+    # Estimate compression
+    total_bits = len(non_zero)*B + zero_count*C
+    compression_rate = (original_size_bytes * 8) / total_bits if total_bits != 0 else float('inf')
+    
+    return avg_mag, compression_rate
 def blockwise_transform(img, block_size, transform_func, D=None):
     h, w = img.shape
     transformed_img = np.zeros_like(img, dtype=np.float32)
@@ -155,31 +274,28 @@ def get_quantization_tables(quality):
         [99, 99, 99, 99, 99, 99, 99, 99]
     ], dtype=np.float32)
 
-    # Ensure quality is in valid range
+    # Ensure quality is in valid range (0-50)
     quality = max(0, min(50, quality))
     
-    # Convert inverse quality scale to the standard JPEG quality factor
-    # where quality=0 → Q=100, quality=50 → Q=1
+    # Convert to standard JPEG Q factor (1-100)
     standard_q = 100 - (quality * 2)
-    
-    if standard_q <= 0:  # This would happen if quality = 50
-        standard_q = 1  # Set to minimum quality
+    if standard_q <= 0:
+        standard_q = 1  # Minimum Q factor = 1
 
-    # Now use the standard formula with the converted quality value
+    # Calculate scaling factor according to French specs
     if standard_q < 50:
-        scale_factor = 5000 / standard_q
-    elif standard_q < 100:
-        scale_factor = 200 - 2 * standard_q
-    else:  # standard_q == 100
-        scale_factor = 1
+        scale_factor = 5000 / standard_q  # Will become 50/Q after division by 100
+    else:
+        scale_factor = 200 - 2 * standard_q  # Will become 2 - Q/50 after division by 100
 
-    # Apply scaling
+    # Final scaling adjustment
     scale_factor = scale_factor / 100.0
-    
+
+    # Apply scaling and ensure values are ≥1
     Q_Y = np.clip(np.round(Q_Y_base * scale_factor), 1, 255)
     Q_C = np.clip(np.round(Q_C_base * scale_factor), 1, 255)
     
-    return Q_Y, Q_C
+    return Q_Y.astype(np.uint8), Q_C.astype(np.uint8)
 def quantize_dct(dct_coeffs, quantization_table):
     """Quantize DCT coefficients using the given quantization table"""
     h, w = dct_coeffs.shape
@@ -198,16 +314,6 @@ def make_dimensions_divisible_by_block_size(img, block_size):
     new_h = (h // block_size) * block_size
     new_w = (w // block_size) * block_size
     return img[:new_h, :new_w]
-
-
-
-def log_scale_dct(dct_coeffs):
-    # Take absolute value (DCT can have negative values)
-    abs_dct = np.abs(dct_coeffs)
-    # Add 1 to avoid log(0)
-    log_dct = np.log(1 + abs_dct)
-    # Normalize to 0-255 for display
-    return (log_dct / np.max(log_dct) * 255).astype(np.uint8)
 
 
 def dequantize_dct(quantized_dct, quantization_table):
@@ -307,17 +413,6 @@ def inverse_zigzag(zigzag_data):
     print(f"Created {len(blocks)} blocks from zigzag data")
     return np.array(blocks)
 
-def reconstruct_full_zigzag(dc_values, ac_flat, block_size=64):
-    full_zigzag = []
-    ac_per_block = block_size - 1  # 63 AC coefficients per block
-    for i, dc in enumerate(dc_values):
-        start = i * ac_per_block
-        end = start + ac_per_block
-        ac = ac_flat[start:end]
-        full_zigzag.append(dc)  # Add DC
-        full_zigzag.extend(ac)  # Add AC
-    return full_zigzag
-
 def flatten_rle(rle):
     return [f"{run}/{val}" for run, val in rle]
 
@@ -355,14 +450,6 @@ def inverse_run_length(rle_data):
         current_block.extend([0] * remaining)
         all_coefficients.extend(current_block)
     return all_coefficients
-
-# Alternative temporary solution if parsing fails completely
-def safe_zigzag_data():
-    """
-    Create safe zigzag data as a fallback
-    Returns a list of 64 zeros (8x8 block)
-    """
-    return [0] * 64
 
 # Set the appearance mode and default color theme
 ctk.set_appearance_mode("System")  
@@ -445,8 +532,8 @@ class JPEGCompressorApp(ctk.CTk):
         quality_frame = ctk.CTkFrame(self.left_frame)
         quality_frame.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
         
-        ctk.CTkLabel(quality_frame, text="Quality Factor (0=best, 50=worst):").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.quality_slider = ctk.CTkSlider(quality_frame, from_=0, to=50, number_of_steps=50)
+        ctk.CTkLabel(quality_frame, text="Quality Factor (0=best, 100=worst):").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.quality_slider = ctk.CTkSlider(quality_frame, from_=0, to=100, number_of_steps=100)
         self.quality_slider.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         self.quality_slider.set(25)  # Default middle value
         
@@ -456,11 +543,22 @@ class JPEGCompressorApp(ctk.CTk):
         # Update quality value when slider changes
         self.quality_slider.configure(command=self.update_quality_value)
         
+       # Create a button frame to hold both buttons
+        self.button_frame = ctk.CTkFrame(self.left_frame)
+        self.button_frame.grid(row=5, column=0, columnspan=2, pady=10)
+
         # Compress button
-        self.compress_button = ctk.CTkButton(self.left_frame, text="Compress Image", command=self.compress_image)
-        self.compress_button.grid(row=5, column=0, padx=20, pady=10)
+        self.compress_button = ctk.CTkButton(self.button_frame, text="Compress Image", 
+                                             command=self.compress_image)
+        self.compress_button.pack(side="left", padx=5)
         self.compress_button.configure(state="disabled")
-        
+
+        # Metrics button 
+        self.viz_metrics_button = ctk.CTkButton(self.button_frame, 
+                                                text="Show Compression Metrics", 
+                                                command=self.show_metrics_window)
+        self.viz_metrics_button.pack(side="left", padx=5)
+        self.viz_metrics_button.configure(state="disabled")
         # Compression results frame
         self.results_frame = ctk.CTkFrame(self.left_frame)
         self.results_frame.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
@@ -528,7 +626,16 @@ class JPEGCompressorApp(ctk.CTk):
         
         # Initially disable zoom buttons
         self.toggle_zoom_controls(False)
-
+    def show_metrics_window(self):
+        """Show the metrics window if it exists, or create it if it doesn't"""
+        if not hasattr(self, 'metrics_window') or not self.metrics_window.winfo_exists():
+            self.create_metrics_frame()
+            # We need to refill the metrics if we're recreating the window
+            if hasattr(self, 'metrics_data') and hasattr(self, 'block_stats'):
+                self.fill_metrics_frame(self.metrics_data, self.block_stats)
+                self.enable_visualization_buttons()
+        else:
+            self.metrics_window.lift()  
     def toggle_zoom_controls(self, enable=True):
         """Enable or disable zoom controls"""
         state = "normal" if enable else "disabled"
@@ -811,10 +918,8 @@ class JPEGCompressorApp(ctk.CTk):
             quality = int(self.quality_slider.get())
             
             # Here we would integrate with your existing compression code
-            # For now, I'll create a placeholder that simulates the process
             try:
                 # Convert the main function to work with our interface
-                # This is where we'll call functions from your existing code
                 self.process_image(self.image_path, quality)
                 
                 # Enable save button after successful compression
@@ -837,15 +942,6 @@ class JPEGCompressorApp(ctk.CTk):
 
     def process_image(self, image_path, quality):
         """Process the image using the existing JPEG compression functions"""
-        from __main__ import (
-            Image, np, make_dimensions_divisible_by_block_size, rgb_to_ycbcr, 
-            downsample, pad_image_to_block_size, dct_matrix, blockwise_transform, 
-            dct_2d_matrix, quantize_dct, get_quantization_tables, zigzag_scan, 
-            Run_Length, flatten_rle, process_huffman_encoding, huffman_decode, 
-            unflatten_rle, inverse_run_length, inverse_zigzag, dequantize_dct, 
-            idct_2d_matrix, unpad_image, ycbcr_to_rgb, psnr
-        )
-        
         # Load the image
         image = Image.open(image_path).convert("RGB")
         block_size = 8
@@ -861,6 +957,9 @@ class JPEGCompressorApp(ctk.CTk):
         # Downsample chrominance channels
         Y_downsampled, Cb_downsampled, Cr_downsampled = downsample(Y, Cb, Cr, "4:2:0")
         
+        # Store these for later use with buttons
+        self.ycbcr_components = (image, Y_downsampled, Cb_downsampled, Cr_downsampled)
+        
         # Pad images to be divisible by block size
         Y_padded, Y_padding = pad_image_to_block_size(Y_downsampled, block_size)
         Cb_padded, Cb_padding = pad_image_to_block_size(Cb_downsampled, block_size)
@@ -875,6 +974,9 @@ class JPEGCompressorApp(ctk.CTk):
         Cb_dct = blockwise_transform(Cb_centered, block_size, dct_2d_matrix, D)
         Cr_dct = blockwise_transform(Cr_centered, block_size, dct_2d_matrix, D)
         
+        # Store DCT components for later use with buttons
+        self.dct_components = (image, Y_dct, Cb_dct, Cr_dct)
+        
         # Get quantization tables
         Q_Y, Q_C = get_quantization_tables(quality)
         
@@ -883,34 +985,111 @@ class JPEGCompressorApp(ctk.CTk):
         Cb_dct_q = quantize_dct(Cb_dct, Q_C)
         Cr_dct_q = quantize_dct(Cr_dct, Q_C)
         
-        # Split into blocks and apply zigzag scan
-        def split_into_blocks(matrix, block_size=8):
-            h, w = matrix.shape
-            blocks = []
-            for y in range(0, h, block_size):
-                for x in range(0, w, block_size):
-                    block = matrix[y:y+block_size, x:x+block_size]
-                    blocks.append(block)
-            return blocks
+        # Store quantized components for later use with buttons
+        self.quantized_components = (Y_dct_q, Cb_dct_q, Cr_dct_q)
+        
+        Y_blocks = split_into_blocks(Y_dct_q)
+        Cb_blocks = split_into_blocks(Cb_dct_q)
+        Cr_blocks = split_into_blocks(Cr_dct_q)
         
         # For Y channel
-        Y_blocks = split_into_blocks(Y_dct_q)
+        Y_zero_counts = []
+        Y_nonzero_counts = []
+        metrics_data = []  # List to store all metrics for display
+
+        for block in Y_blocks:
+            zero, nonzero = count_zero_nonzero_per_block(block)
+            Y_zero_counts.append(zero)
+            Y_nonzero_counts.append(nonzero)
+
+        # Calculate overall zero percentage for Y
+        total_blocks_Y = len(Y_blocks)
+        total_coeff_Y = total_blocks_Y * 64
+        total_zero_Y = sum(Y_zero_counts)
+        total_zero_Y_percent = (total_zero_Y / total_coeff_Y) * 100
+
+        metrics_data.append(f"Y Channel - Zero percentage: {total_zero_Y_percent:.2f}%")
+
+        # For Cb channel
+        Cb_zero_counts = []
+        Cb_nonzero_counts = []
+
+        for block in Cb_blocks:
+            zero, nonzero = count_zero_nonzero_per_block(block)
+            Cb_zero_counts.append(zero)
+            Cb_nonzero_counts.append(nonzero)
+
+        # Calculate overall zero percentage for Cb
+        total_blocks_Cb = len(Cb_blocks)
+        total_coeff_Cb = total_blocks_Cb * 64
+        total_zero_Cb = sum(Cb_zero_counts)
+        total_zero_Cb_percent = (total_zero_Cb / total_coeff_Cb) * 100
+
+        metrics_data.append(f"Cb Channel - Zero percentage: {total_zero_Cb_percent:.2f}%")
+
+        # For Cr channel
+        Cr_zero_counts = []
+        Cr_nonzero_counts = []
+
+        for block in Cr_blocks:
+            zero, nonzero = count_zero_nonzero_per_block(block)
+            Cr_zero_counts.append(zero)
+            Cr_nonzero_counts.append(nonzero)
+
+        # Calculate overall zero percentage for Cr
+        total_blocks_Cr = len(Cr_blocks)
+        total_coeff_Cr = total_blocks_Cr * 64
+        total_zero_Cr = sum(Cr_zero_counts)
+        total_zero_Cr_percent = (total_zero_Cr / total_coeff_Cr) * 100
+
+        metrics_data.append(f"Cr Channel - Zero percentage: {total_zero_Cr_percent:.2f}%")
+        
+        # Flatten the quantized coefficients
+        Y_flat = get_flattened_coefficients(Y_blocks)  
+        Cb_flat = get_flattened_coefficients(Cb_blocks)
+        Cr_flat = get_flattened_coefficients(Cr_blocks)
+
+        # Store distribution data for later use with buttons
+        self.distribution_data = (Y_flat, Cb_flat, Cr_flat, quality)
+        
+        image = cv2.imread(image_path)
+        
+        h, w = image.shape[:2]
+        origin_size = h * w * 3
+        avg_mag, comp_rate = analyze_compression(Y_dct_q, Cb_dct_q, Cr_dct_q, origin_size)
+        metrics_data.append(f"Avg magnitude: {avg_mag:.1f}, Compression rate: {comp_rate:.1f}x")
+        
+        # Store block statistics
+        block_stats = []
+        
+        # For Y channel
+        for i, block in enumerate(Y_blocks[:4]):
+            mean, variance = compute_block_stats(block)
+            block_stats.append(f"Block {i+1} For Y: Mean = {mean:.2f}, Variance = {variance:.2f}")
+            
         zigzag_y = []
         for block in Y_blocks:
             zigzag_y.extend(zigzag_scan(block))
             
         # For Cb channel
-        Cb_blocks = split_into_blocks(Cb_dct_q)
+        for i, block in enumerate(Cb_blocks[:4]):
+            mean, variance = compute_block_stats(block)
+            block_stats.append(f"Block {i+1} For Cb: Mean = {mean:.2f}, Variance = {variance:.2f}")
+            
         zigzag_cb = []
         for block in Cb_blocks:
             zigzag_cb.extend(zigzag_scan(block))
             
         # For Cr channel
-        Cr_blocks = split_into_blocks(Cr_dct_q)
+        for i, block in enumerate(Cr_blocks[:4]):
+            mean, variance = compute_block_stats(block)
+            block_stats.append(f"Block {i+1} For Cr: Mean = {mean:.2f}, Variance = {variance:.2f}")
+            
         zigzag_cr = []
         for block in Cr_blocks:
             zigzag_cr.extend(zigzag_scan(block))
         
+        # Rest of the processing code (unchanged) ...
         # Extract DC and AC coefficients
         block_size_z = 64  # 1 DC + 63 AC per block
         num_blocks = len(zigzag_y) // block_size_z
@@ -1050,7 +1229,7 @@ class JPEGCompressorApp(ctk.CTk):
         # Convert back to RGB
         reconstructed_image = ycbcr_to_rgb(Y_unpadded, Cb_unpadded, Cr_unpadded)
 
-       # Create temporary file for size calculation
+        # Create temporary file for size calculation
         temp_file = "temp_compressed_image.jpg"
         Image.fromarray(np.uint8(reconstructed_image)).save(temp_file)
 
@@ -1063,7 +1242,6 @@ class JPEGCompressorApp(ctk.CTk):
 
         # Clean up temporary file
         os.remove(temp_file)
-
 
         # Calculate metrics
         self.original_size = os.path.getsize(self.image_path)
@@ -1080,7 +1258,137 @@ class JPEGCompressorApp(ctk.CTk):
         # Store and display the reconstructed image
         self.compressed_image = reconstructed_image
         self.display_compressed_image(reconstructed_image)
+        
+        # Store metrics data for later access
+        self.metrics_data = metrics_data
+        self.block_stats = block_stats
+        
+        # Enable the metrics visualization button
+        if hasattr(self, 'viz_metrics_button'):
+            self.viz_metrics_button.configure(state="normal")
+            # Enable visualization buttons
+        
+        self.enable_visualization_buttons()
 
+    def create_metrics_frame(self):
+        """Create a separate window to display compression metrics and visualization options"""
+        # Create a new top-level window
+        self.metrics_window = ctk.CTkToplevel(self)
+        self.metrics_window.title("JPEG Compression Metrics")
+        self.metrics_window.geometry("600x600")
+        self.metrics_window.resizable(True, True)
+        
+        # Create main frames for the window
+        metrics_frame = ctk.CTkFrame(self.metrics_window)
+        metrics_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        viz_buttons_frame = ctk.CTkFrame(self.metrics_window)
+        viz_buttons_frame.pack(fill="x", padx=20, pady=10)
+        
+        # Create label for metrics
+        metrics_title = ctk.CTkLabel(metrics_frame, text="Compression Metrics", font=("Arial", 16, "bold"))
+        metrics_title.pack(anchor="w", padx=10, pady=5)
+        
+        # Create scrollable text area for metrics
+        self.metrics_text = ctk.CTkTextbox(metrics_frame, width=550, height=400)
+        self.metrics_text.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Create label for visualization buttons
+        viz_title = ctk.CTkLabel(viz_buttons_frame, text="Visualization Options", font=("Arial", 16, "bold"))
+        viz_title.pack(anchor="w", padx=10, pady=5)
+        
+        # Create button frame for organized layout
+        button_grid = ctk.CTkFrame(viz_buttons_frame)
+        button_grid.pack(fill="x", padx=10, pady=5)
+        
+        # Create buttons for different visualizations in a 2x2 grid
+        self.ycbcr_button = ctk.CTkButton(button_grid, text="Show YCbCr Components", 
+                                         command=self.show_ycbcr)
+        self.ycbcr_button.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        
+        self.dct_button = ctk.CTkButton(button_grid, text="Show DCT Components",
+                                       command=self.show_dct)
+        self.dct_button.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        
+        self.quantized_button = ctk.CTkButton(button_grid, text="Show Quantized Components",
+                                            command=self.show_quantized_components)
+        self.quantized_button.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        
+        self.distribution_button = ctk.CTkButton(button_grid, text="Show Distributions",
+                                               command=self.show_distributions)
+        self.distribution_button.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        
+        # Configure grid columns to expand evenly
+        button_grid.columnconfigure(0, weight=1)
+        button_grid.columnconfigure(1, weight=1)
+        
+        # Disable all buttons initially
+        self.ycbcr_button.configure(state="disabled")
+        self.dct_button.configure(state="disabled")
+        self.quantized_button.configure(state="disabled")
+        self.distribution_button.configure(state="disabled")
+
+    def fill_metrics_frame(self, metrics_data, block_stats):
+        """Fill the metrics window with compression data"""
+        if hasattr(self, 'metrics_text'):
+            self.metrics_text.delete("0.0", "end")  # Clear existing text
+            
+            # Add image path and quality
+            image_name = os.path.basename(self.image_path)
+            quality = self.quality_slider.get()
+            self.metrics_text.insert("end", f"Image: {image_name}\n")
+            self.metrics_text.insert("end", f"Quality Setting: {quality}\n\n")
+            
+            # Add compression metrics
+            self.metrics_text.insert("end", "COMPRESSION METRICS:\n\n")
+            for metric in metrics_data:
+                self.metrics_text.insert("end", f"{metric}\n") 
+            # Add block statistics
+            self.metrics_text.insert("end", "\nBLOCK STATISTICS:\n\n")
+            for stat in block_stats:
+                self.metrics_text.insert("end", f"{stat}\n")
+
+            self.metrics_text.insert("end", f"\nOriginal Size: {self.format_size(self.original_size)}\n")
+            self.metrics_text.insert("end", f"Compressed Size: {self.format_size(self.compressed_size)}\n")
+            self.metrics_text.insert("end", f"Compression Rate: {self.compression_rate:.2f}x\n")
+            self.metrics_text.insert("end", f"PSNR: {self.psnr_value:.2f} dB\n")
+    def enable_visualization_buttons(self):
+        """Enable visualization buttons after compression"""
+        if hasattr(self, 'ycbcr_button'):
+            self.ycbcr_button.configure(state="normal")
+        if hasattr(self, 'dct_button'):
+            self.dct_button.configure(state="normal")
+        if hasattr(self, 'quantized_button'):
+            self.quantized_button.configure(state="normal")
+        if hasattr(self, 'distribution_button'):
+            self.distribution_button.configure(state="normal")
+        
+    def show_ycbcr(self):
+        """Show YCbCr components visualization"""
+        if hasattr(self, 'ycbcr_components'):
+            image, Y, Cb, Cr = self.ycbcr_components
+            show_ycrcb_components(image, Y, Cb, Cr)
+        
+    def show_dct(self):
+        """Show DCT components visualization"""
+        if hasattr(self, 'dct_components'):
+            image, Y_dct, Cb_dct, Cr_dct = self.dct_components
+            showDCT(image, Y_dct, Cb_dct, Cr_dct)
+        
+    def show_quantized_components(self):
+        """Show quantized components visualization"""
+        if hasattr(self, 'quantized_components'):
+            Y_dct_q, Cb_dct_q, Cr_dct_q = self.quantized_components
+            show_quantized(Y_dct_q, Cb_dct_q, Cr_dct_q)
+        
+    def show_distributions(self):
+        """Show distribution visualizations"""
+        if hasattr(self, 'distribution_data'):
+            Y_flat, Cb_flat, Cr_flat, quality = self.distribution_data
+            plot_quantized_distribution(Y_flat, quality, channel="Y")
+            plot_quantized_distribution(Cb_flat, quality, channel="Cb")
+            plot_quantized_distribution(Cr_flat, quality, channel="Cr")
+            
     def save_compressed_image(self):
         """Save the compressed image to disk"""
         if self.compressed_image is not None:
