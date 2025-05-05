@@ -43,7 +43,7 @@ pip install customtkinter numpy pillow matplotlib
 3. Run the application
 
 ```bash
-python jpeg_compressor_app.py
+python Compressor.py
 ```
 
 ## Usage
@@ -151,7 +151,7 @@ The application implements the JPEG compression algorithm, which works through t
    - 4:2:2 = Horizontal subsampling only
    - 4:2:0 = Both horizontal and vertical subsampling (most common)
 
-4. **Original Image Size**: If the original image size is big the duration of the compression will be too long, around 5 minutes for images that are 6 mb
+4. **Original Image Size**: If the original image Dimensions are big the duration of the compression will be take too long, around 5 minutes for images that are 3000x4000
 
 The JPEG compression algorithm achieves significant file size reduction while maintaining reasonable visual quality by exploiting limitations in human visual perception, especially our reduced sensitivity to high-frequency details and color variations.
 
