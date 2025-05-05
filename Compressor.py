@@ -1058,6 +1058,8 @@ class JPEGCompressorApp(ctk.CTk):
         metrics_data.append(f"Cr channel - Total coefficients: {total_coeff_Cr}")
         metrics_data.append(f"Cr channel - Zero percentage: {total_zero_Cr_percent:.2f}%\n")
         
+        all_channels_zero_percentage = (total_zero_Cb_percent + total_zero_Cr_percent + total_zero_Y_percent) / 3
+        metrics_data.append(f"All channels - Zero percentage: {all_channels_zero_percentage:.2f}%\n")
         # Flatten the quantized coefficients
         Y_flat = get_flattened_coefficients(Y_blocks)  
         Cb_flat = get_flattened_coefficients(Cb_blocks)
@@ -1103,7 +1105,6 @@ class JPEGCompressorApp(ctk.CTk):
         for block in Cr_blocks:
             zigzag_cr.extend(zigzag_scan(block))
         
-        # Rest of the processing code (unchanged) ...
         # Extract DC and AC coefficients
         block_size_z = 64  # 1 DC + 63 AC per block
         num_blocks = len(zigzag_y) // block_size_z
@@ -1149,7 +1150,6 @@ class JPEGCompressorApp(ctk.CTk):
         res_cb = process_huffman_encoding("|".join(symbols_cb))
         res_cr = process_huffman_encoding("|".join(symbols_cr))
         
-        # Now decompress for display
         
         # Decode Huffman
         decoded_y = huffman_decode(res_y['coded_message'], res_y['huffman_codes'])
