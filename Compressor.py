@@ -1006,9 +1006,12 @@ class JPEGCompressorApp(ctk.CTk):
         total_blocks_Y = len(Y_blocks)
         total_coeff_Y = total_blocks_Y * 64
         total_zero_Y = sum(Y_zero_counts)
+        total_nonezero_Y = sum(Y_nonzero_counts)
         total_zero_Y_percent = (total_zero_Y / total_coeff_Y) * 100
-
-        metrics_data.append(f"Y Channel - Zero percentage: {total_zero_Y_percent:.2f}%")
+        metrics_data.append(f"Y channel - Zero counts per block: {total_zero_Y}\n")
+        metrics_data.append(f"Y channel - Non-zero counts per block: {total_nonezero_Y}")
+        metrics_data.append(f"Y channel - Total coefficients: {total_coeff_Y}")
+        metrics_data.append(f"Y Channel - Zero percentage: {total_zero_Y_percent:.2f}%")   
 
         # For Cb channel
         Cb_zero_counts = []
@@ -1023,8 +1026,11 @@ class JPEGCompressorApp(ctk.CTk):
         total_blocks_Cb = len(Cb_blocks)
         total_coeff_Cb = total_blocks_Cb * 64
         total_zero_Cb = sum(Cb_zero_counts)
+        total_nonezero_Cb = sum(Cb_nonzero_counts)
         total_zero_Cb_percent = (total_zero_Cb / total_coeff_Cb) * 100
-
+        metrics_data.append(f"Cb channel - Zero counts per block: {total_zero_Cb}\n")
+        metrics_data.append(f"Cb channel - Non-zero counts per block: {total_nonezero_Cb}")
+        metrics_data.append(f"Cb channel - Total coefficients: {total_coeff_Cb}")
         metrics_data.append(f"Cb Channel - Zero percentage: {total_zero_Cb_percent:.2f}%")
 
         # For Cr channel
@@ -1040,8 +1046,11 @@ class JPEGCompressorApp(ctk.CTk):
         total_blocks_Cr = len(Cr_blocks)
         total_coeff_Cr = total_blocks_Cr * 64
         total_zero_Cr = sum(Cr_zero_counts)
+        total_nonezero_Cr = sum(Cr_nonzero_counts)
         total_zero_Cr_percent = (total_zero_Cr / total_coeff_Cr) * 100
-
+        metrics_data.append(f"Cr channel - Zero counts per block: {total_zero_Cr}\n")
+        metrics_data.append(f"Cr channel - Non-zero counts per block: {total_nonezero_Cr}")
+        metrics_data.append(f"Cr channel - Total coefficients: {total_coeff_Cr}")
         metrics_data.append(f"Cr Channel - Zero percentage: {total_zero_Cr_percent:.2f}%")
         
         # Flatten the quantized coefficients
